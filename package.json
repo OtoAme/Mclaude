@@ -1,0 +1,15 @@
+{
+  "name": "mclaude",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Run Claude Code with Mirasim Desktop's model settings",
+  "bin": {
+    "mclaude": "mclaude.cjs"
+  },
+  "scripts": {
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
