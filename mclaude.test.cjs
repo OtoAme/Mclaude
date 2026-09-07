@@ -5,6 +5,8 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const vm = require('node:vm');
+const { EventEmitter } = require('node:events');
 const { findMirasim, parseArgs, readCatalog, cachedCatalog, buildSettings } = require('./mclaude.cjs');
 
 const catalog = {
@@ -198,7 +200,7 @@ test('follows the confirmed payload rather than a newer directory', (t) => {
 test('overrides model roles without copying unrelated settings or credentials', () => {
   const result = buildSettings(catalog, {});
   assert.equal(result.settings.env.ANTHROPIC_MODEL, catalog.defaultModel);
-  assert.equal(result.settings.env.CLAUDE_CODE_EFFORT_LEVEL, 'high');
+  assert.equal(result.settings.env.CLAUDE_CODE_EFFORT_LEVEL, '');
   assert.equal(result.settings.env.ANTHROPIC_DEFAULT_SONNET_MODEL, 'claude-sonnet-5[1m]');
   assert.equal(result.settings.env.ANTHROPIC_DEFAULT_HAIKU_MODEL, catalog.defaultModel);
   assert.equal(result.roles.fable, 'claude-fable-5-1[1m]');
@@ -207,6 +209,44 @@ test('overrides model roles without copying unrelated settings or credentials', 
   assert.deepEqual(Object.keys(result.settings), ['env']);
   assert.equal('ANTHROPIC_AUTH_TOKEN' in result.settings.env, false);
   assert.equal('ANTHROPIC_BASE_URL' in result.settings.env, false);
+});
+
+test('passes startup effort while clearing environment overrides in both launch sources', () => {
+  const source = fs.readFileSync(path.join(__dirname, 'mclaude.cjs'), 'utf8');
+  const entry = '/mirasim/server.cjs';
+  for (const inherited of [undefined, 'high', 'max']) {
+    for (const effort of [undefined, 'low', 'max']) {
+      let captured;
+      const child = new EventEmitter();
+      const parent = Object.assign(new EventEmitter(), {
+        execPath: process.execPath,
+        env: inherited === undefined ? {} : { CLAUDE_CODE_EFFORT_LEVEL: inherited }
+      });
+      const context = vm.createContext({
+        module: { exports: {} }, __dirname, process: parent, console,
+        entry, catalog, options: effort ? { effort } : {},
+        require: (name) => name === 'node:child_process' ? {
+          spawn: (command, args, options) => {
+            captured = { command, args, options };
+            return child;
+          }
+        } : require(name)
+      });
+      vm.runInContext(source, context, { filename: 'mclaude.cjs' });
+      vm.runInContext('launch(entry, buildSettings(catalog, options), []);', context);
+      child.emit('exit', 0, null);
+
+      assert.equal(captured.command, process.execPath);
+      assert.deepEqual(Array.from(captured.args.slice(0, 6)), [
+        entry, 'claude', '--model', catalog.defaultModel,
+        '--effort', effort || catalog.defaultEffort
+      ]);
+      assert.equal(captured.args[6], '--settings');
+      const settings = JSON.parse(captured.args[7]);
+      assert.equal(settings.env.CLAUDE_CODE_EFFORT_LEVEL, '');
+      assert.equal(captured.options.env.CLAUDE_CODE_EFFORT_LEVEL, '');
+    }
+  }
 });
 
 test('explicit model and effort win, while resume and literal prompt arguments survive', () => {

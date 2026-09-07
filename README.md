@@ -71,7 +71,11 @@ mclaude --continue
 - 缓存未命中时，优先连接运行中的 Desktop（本机端口 `4970`）；读取失败时，由 Mirasim CLI 临时启动一次性后台服务，读取同一份配置后自动关闭。无需手动启动后台服务。
 - 缓存只保存模型信息和校验元数据，不保存登录凭据或后台端口。缓存损坏、时间戳异常或无法写入时仍会正常查询；查询期间配置发生变化时，本次结果不写入缓存。缓存过期后的下一次启动会重新获取目录；远端发布新模型后，可以使用 `--refresh` 提前刷新。刷新失败时本次启动报错，已有缓存文件保留。
 - mclaude 不设置 `ANTHROPIC_BASE_URL` 和 `ANTHROPIC_AUTH_TOKEN`：Base URL 指向 Mirasim 的本机代理，登录与请求路由都由 Mirasim CLI 处理，不依赖 Desktop 的 `4970` 服务。
-- 模型、推理强度、角色映射和子代理默认模型只通过本次启动的 `--settings` 覆盖和环境变量传入，不修改 `~/.claude/settings.json` 或 Mirasim 的配置文件。
+- 主模型通过 `--model` 指定，模型相关环境变量通过本次启动的 `--settings` 和子进程环境传入。
+- 推理强度的启动值优先采用 `mclaude --effort` 显式指定的值，未指定时采用 Mirasim 模型目录中的默认值，并通过 Claude Code 的 `--effort` 参数传入。需要长期改变默认强度时，在 Mirasim 中修改 Claude 的默认推理强度；配置文件内容变化会使目录缓存失效，下次启动重新读取。
+- 本次启动将 `CLAUDE_CODE_EFFORT_LEVEL` 覆盖为空字符串，因此父进程环境及 Claude Code 用户、项目配置中的同名变量在 mclaude 会话中不再控制 effort，`/effort` 可以调整实际生效值。直接运行 `claude` 时仍使用原有配置。
+- 会话内通过 `/effort` 修改的强度不会改变 mclaude 下次启动的默认值。Claude Code 的 `saved as your default for new sessions` 提示指其自身保存的默认值，不会回写 Mirasim；mclaude 仍遵循上述启动优先级。
+- 启动器不修改 `~/.claude/settings.json` 或 Mirasim 的配置文件；Claude Code 自身的交互命令仍可能保存用户设置。
 - 继续加载现有的技能、MCP、Hooks 和权限设置。
 - 角色映射（`opus`、`sonnet`、`haiku`、`fable`）：与主模型同系列时沿用主模型，否则按去除 `[1m]` 后的 ID 做数字感知排序，取该系列排序最高的模型；同一版本有两个变体时优先选择目录中的 `[1m]` 变体。别名需要从该系列自动选择模型时也使用此规则。目录缺少某个系列时回退到主模型，并打印提示。`ANTHROPIC_SMALL_FAST_MODEL` 使用 `haiku` 角色的结果。
 - 配置读取失败或模型目录无效时会报错。Mirasim 内部入口或接口格式变化时，可能需要更新启动器。

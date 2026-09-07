@@ -165,7 +165,8 @@ function buildSettings(catalog, options) {
   }
   const env = {
     ANTHROPIC_MODEL: model,
-    CLAUDE_CODE_EFFORT_LEVEL: effort,
+    // Clear the env override so --effort sets the initial level and /effort can change it.
+    CLAUDE_CODE_EFFORT_LEVEL: '',
     CLAUDE_CODE_SUBAGENT_MODEL: model
   };
   const roles = {};
