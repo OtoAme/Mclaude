@@ -4,7 +4,8 @@
   "private": true,
   "description": "Run Claude Code with Mirasim Desktop's model settings",
   "bin": {
-    "mclaude": "mclaude.cjs"
+    "mclaude": "mclaude.cjs",
+    "mkimi": "mkimi.cjs"
   },
   "scripts": {
     "test": "node --test"
