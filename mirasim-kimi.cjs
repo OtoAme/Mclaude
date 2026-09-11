@@ -23,7 +23,7 @@ function adaptBundle(source) {
   source = source.replace(marker, marker + fields);
 
   // Keep the signed cloud route available even when a native Kimi login exists.
-  const relay = /('kimi':\{'agent':'kimi','baseURL':[^,]+,'authScheme':[^,]+,'quotaFailover':)([^,]+)(,'pathPrefix':'\/v1'\})/g;
+  const relay = /('kimi':\{'agent':'kimi','baseURL':[^,{}]+,'authScheme':[^,{}]+,'quotaFailover':)([^,{}]+)(,'pathPrefix':'\/v1'(?:,'soldWithoutOwnAccount':[^,{}]+)?\})/g;
   if ([...source.matchAll(relay)].length !== 1) {
     throw new Error('Mirasim 的 Kimi 云路由结构已变化，需要更新 mkimi 适配。');
   }

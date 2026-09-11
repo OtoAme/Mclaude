@@ -91,8 +91,25 @@ test('adapted metadata supplies a gated cloud proxy to the terminal runner', () 
   assert.equal(cloud.pathPrefix, '/v1');
 });
 
+test('preserves the Kimi account policy added in Mirasim 0.0.315', () => {
+  for (const policy of ['true', 'false', '!(0x1ec3+0x285*0xb+-0x3a7a)']) {
+    const source = fixture.replace("'pathPrefix':'/v1'",
+      "'pathPrefix':'/v1','soldWithoutOwnAccount':" + policy);
+    const original = { origin: () => 'https://relay.mirasim.ai', auth: { scheme: 'bearer' } };
+    const adapted = { ...original };
+    vm.runInNewContext(source, original);
+    vm.runInNewContext(adaptBundle(source), adapted);
+    assert.deepEqual({ ...adapted.result.cloud }, { ...original.result.cloud, quotaFailover: true });
+    assert.equal(adapted.result.agent.relayPrimary, true);
+  }
+});
+
 test('refuses changed or ambiguous Mirasim structures before loading them', () => {
   for (const input of [fixture + fixture, fixture.replace("'quotaFailover'", "'newQuotaField'"),
+    fixture.replace("'pathPrefix':'/v1'", "'pathPrefix':'/v2'"),
+    fixture.replace("'pathPrefix':'/v1'", "'pathPrefix':'/v1','newPolicy':true"),
+    fixture.replace('result={', "const other={'kimi':{'agent':'kimi','baseURL':origin()," +
+      "'authScheme':auth.scheme,'quotaFailover':false,'pathPrefix':'/v1'}};result={"),
     fixture.replace("'binEnv':'MIRASIM_KIMI_BIN'", "'baseUrlEnv':'NATIVE_URL'"),
     adaptBundle(fixture)]) {
     assert.throws(() => adaptBundle(input), /结构已变化|配置已变化/);
