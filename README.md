@@ -115,6 +115,23 @@ K3 的单次输出预算单独设置为 131,072 tokens，包含思考和回答�
 
 当前兼容处理在内存中补齐 Mirasim 的 Kimi 终端连接配置，并使本次启动使用云路由；不修改 Mirasim 安装文件或用户设置。已验证 Mirasim 0.0.295 与 Kimi Code CLI 0.41.0。启动器跟随 Mirasim 的已确认版本；内部配置结构变化时会停止并提示更新适配。
 
+### Agent 与脚本调用
+
+**使用 `-p` / `--prompt` 时，不得同时传入 `--yolo`（`-y`）或 `--auto`。** Kimi Code CLI 0.42.0 会在调用模型之前拒绝这些组合；`mkimi` 原样透传参数，不会自动移除冲突选项。
+
+`-p` 已启用非交互执行，默认使用 `auto` 权限策略，不请求人工批准，静态拒绝规则仍生效。调用方应直接使用 `-p`，需要结构化输出时搭配 `--output-format stream-json`。`--yolo` 和 `--auto` 用于交互模式的权限选择。[官方参数规则](https://moonshotai.github.io/kimi-code/en/reference/kimi-command.html#flag-conflict-rules)
+
+```bash
+mkimi --output-format stream-json -p "解释当前项目"
+mkimi --effort high --output-format stream-json -p "解释当前项目"
+```
+
+其他 agent 通过子进程调用时，参数数组示例：
+
+```python
+args = ["mkimi", "--output-format", "stream-json", "-p", prompt]
+```
+
 ## Codex 终端
 
 `mcodex` 使用 Mirasim 云额度启动官方 Codex CLI，默认模型和推理强度采用 Mirasim 的 Codex 设置。安装方式与上文相同；已有安装重新执行安装命令即可增加 `mcodex` 入口。
