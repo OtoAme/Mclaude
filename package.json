@@ -5,7 +5,8 @@
   "description": "Run Claude Code with Mirasim Desktop's model settings",
   "bin": {
     "mclaude": "mclaude.cjs",
-    "mkimi": "mkimi.cjs"
+    "mkimi": "mkimi.cjs",
+    "mcodex": "mcodex.cjs"
   },
   "scripts": {
     "test": "node --test"

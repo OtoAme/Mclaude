@@ -2,12 +2,13 @@
 
 适用于 macOS 版 Mirasim Desktop 的终端启动器，可在普通终端或 IDE 内置终端中复用 Mirasim 的模型配置与请求路由。基于 Node.js 内置模块实现，无第三方 npm 依赖。
 
-目前提供以下两个启动器：
+目前提供以下三个启动器：
 
 | 命令 | 启动的客户端 | 支持的模型 | 请求路由 |
 | --- | --- | --- | --- |
 | `mclaude` | Claude Code | Mirasim 的 Claude 模型目录中的模型，支持 Opus、Sonnet、Haiku、Fable 系列别名 | 跟随 Mirasim 的 Claude 路由设置：本机账号、自动云端回退或云端 |
 | `mkimi` | Kimi Code CLI | Kimi K3（目录 ID：`kimi-code/k3`，请求 ID：`kimi-k3`） | 使用 Mirasim 云路由，消耗现有 Mirasim 额度 |
+| `mcodex` | Codex CLI | Mirasim 的 Codex 模型目录中的 GPT 模型 | 使用 Mirasim 云路由，消耗现有 Mirasim 额度 |
 
 模型实际可用性以 Mirasim 当前账号返回的目录为准。
 
@@ -17,6 +18,7 @@
 - Node.js 20 或更高版本。
 - 使用 `mclaude`：已安装 Claude Code，终端可以执行 `claude`（Mirasim 通过 PATH 查找该命令）。
 - 使用 `mkimi`：已安装官方 Kimi Code CLI，终端可以执行 `kimi`。
+- 使用 `mcodex`：已安装官方 Codex CLI，终端可以执行 `codex`。
 - 已安装 Mirasim Desktop，并至少打开一次完成初始化；日常使用可以关闭 Desktop。
 - 使用 Mirasim 云额度时，需在 Desktop 中完成登录并选择云路由。
 
@@ -43,6 +45,7 @@ pnpm add -g "$PWD"
 ```bash
 mclaude --help
 mkimi --help
+mcodex --help
 ```
 
 两种方式都会创建指向当前项目的命令入口，修改源码后立即生效，mclaude 的模型目录缓存也保存在此项目中。所选包管理器的全局命令目录需要在 PATH 中。
@@ -112,12 +115,33 @@ K3 的单次输出预算单独设置为 131,072 tokens，包含思考和回答�
 
 当前兼容处理在内存中补齐 Mirasim 的 Kimi 终端连接配置，并使本次启动使用云路由；不修改 Mirasim 安装文件或用户设置。已验证 Mirasim 0.0.295 与 Kimi Code CLI 0.41.0。启动器跟随 Mirasim 的已确认版本；内部配置结构变化时会停止并提示更新适配。
 
+## Codex 终端
+
+`mcodex` 使用 Mirasim 云额度启动官方 Codex CLI，默认模型和推理强度采用 Mirasim 的 Codex 设置。安装方式与上文相同；已有安装重新执行安装命令即可增加 `mcodex` 入口。
+
+```bash
+mcodex                              # 交互终端
+mcodex --dry-run                    # 查看模型、上下文长度、推理强度和路由
+mcodex --model gpt-6-astra           # 本次指定目录中的模型
+mcodex --effort high                # 本次指定推理强度
+mcodex resume --last                # 继续最近的 Codex 会话
+mcodex --effort high exec "解释当前项目"
+mcodex -- --help                    # 查看官方 Codex CLI 参数
+```
+
+启动器选项须放在 Codex 参数之前。`--model` 接受目录中的完整模型 ID，`default` 表示采用 Mirasim 的默认模型；`--effort` 接受当前目录提供的推理强度，目前包括 `low`、`medium`、`high`、`xhigh`、`max`、`ultra`。每次启动重新读取目录，优先连接 Desktop，未运行时通过临时后台查询。上下文长度也采用目录中的值。
+
+`mcodex` 在本次进程中启用 Mirasim 的云代理、设备签名和令牌续期，云路由不可用时停止请求。模型、推理强度和代理连接通过 Codex 启动参数及临时环境变量传入；继续使用现有 `CODEX_HOME`、会话、技能、MCP 和权限配置。启动器不修改 Codex 或 Mirasim 的用户配置，Codex 自身的交互命令仍可能保存用户设置。
+
+兼容处理在内存中适配 Mirasim 的 Codex 终端入口，不修改安装文件。已验证 Mirasim 0.0.315 与 Codex CLI 0.154.0；内部结构变化时会停止并提示更新适配。
+
 ## 验证
 
 ```bash
 npm test
 mclaude --dry-run
 mkimi --dry-run
+mcodex --dry-run
 ```
 
 测试覆盖 Desktop 连接与一次性后台查询、失败时不泄露后台输出、缓存复用与失效、缓存损坏与不可写、手动刷新与刷新失败后的保留、版本自动跟随、模型映射、角色回退和参数传递。
