@@ -36,14 +36,25 @@ function adaptBundle(source) {
   const adapted = descriptor.replace(marker, marker + fields).replace("'capture':'mitm'", "'capture':'redirect'");
   source = source.slice(0, start) + adapted + source.slice(end);
 
-  const relay = /('codex':\{'agent':'codex','baseURL':[^,{}]+,'authScheme':[^,{}]+,'quotaFailover':)[^,{}]+(\})/g;
+  const relay = /('codex':\{'agent':'codex','baseURL':[^,{}]+,'authScheme':[^,{}]+,'(?:quotaFailover|carriesOrdinaryTraffic)':)[^,{}]+(\})/g;
+  const credentials = /![\w$]+\['accountToken'\]&&!!([\w$]+)\['relayToken'\]&&([\w$]+)\(\)&&!!([\w$]+)\(([\w$]+)\['agent'\]\)&&![\w$]+\([\w$]+\(\),\4\['agent'\]\)/g;
+  const relayMatches = [...source.matchAll(relay)];
+  const modern = relayMatches[0]?.[1].includes("'carriesOrdinaryTraffic'");
   // Keep the cloud-only decision after credential renewal or Desktop route changes.
   const routing = /('failoverAgent':[\w$]+\['agent'\],)('relayCredentialless':\(\)=>[\w$]+,)/g;
   // Provider options must precede Codex's literal prompt separator.
   const argv = /\[\.\.\.this\['baseArgs'\],\.\.\.([\w$]+\['extraArgs'\])\?\?\[\]\]/g;
-  if ([...source.matchAll(relay)].length !== 1 || [...source.matchAll(routing)].length !== 1 ||
+  if (relayMatches.length !== 1 || [...source.matchAll(routing)].length !== 1 ||
+      (modern && [...source.matchAll(credentials)].length !== 1) ||
       [...source.matchAll(argv)].length !== 1) {
     throw new Error('Mirasim 的 Codex 云路由结构已变化，需要更新 mcodex 适配。');
+  }
+  // Newer runners enable the managed proxy through credentialless mode instead
+  // of relayPrimary. Require a cloud login before creating the proxy or client.
+  if (modern) {
+    source = source.replace(credentials, (_match, config, enabled, agent, options) =>
+      `(()=>{if(!${config}['relayToken']||!${enabled}()||!${agent}(${options}['agent']))` +
+      `{throw new Error('mcodex 需要可用的 Mirasim 云端登录。');}return true;})()`);
   }
   return source.replace(relay, '$1true$2')
     .replace(routing, "$1'relayCloudOnly':()=>true,$2")

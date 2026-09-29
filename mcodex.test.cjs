@@ -96,6 +96,49 @@ const driver={baseArgs:[],argv(plan){return [...this['baseArgs'],...plan['extraA
 result={agent:agents.codex,other:agents.dsh,cloud:cloud.codex,interceptor,driver};
 `;
 
+const modernFixture = fixture.replace("'quotaFailover':false", "'carriesOrdinaryTraffic':!(0x1931*-0x1+0x53*-0x37+0x89b*0x5)")
+  .replace("const options={agent:'codex'};", `
+const options={agent:'codex',accountToken:nativeToken};
+const credentialless=!options['accountToken']&&!!config['relayToken']&&feature()&&!!lookup(options['agent'])&&!native(settings(),options['agent']);
+const useRelay=(cloud.codex.carriesOrdinaryTraffic||credentialless)&&config.relayToken&&(config.enabled||credentialless);
+`)
+  .replace('result={agent:', 'result={useRelay,agent:');
+
+test('adapts the current cloud policy and enables managed auth even with a native account', () => {
+  for (const enabled of [false, true]) {
+    for (const nativeToken of [null, 'native-token']) {
+      const context = { origin: () => 'https://relay.mirasim.ai', auth: { scheme: 'bearer' },
+        config: { enabled, relayToken: 'cloud-token' }, nativeToken,
+        feature: () => true, lookup: () => ({}),
+        native: () => { throw new Error('native credentials must not be consulted'); } };
+      vm.runInNewContext(adaptBundle(modernFixture), context);
+      assert.equal(context.result.cloud.carriesOrdinaryTraffic, true);
+      assert.equal(context.result.useRelay, true);
+      assert.equal(context.result.agent.authTokenEnv, 'MCODEX_API_KEY');
+      assert.equal(context.result.interceptor.relayCredentialless(), true);
+      assert.equal(context.result.interceptor.relayCloudOnly(), true);
+      context.config.enabled = !enabled;
+      assert.equal(context.result.interceptor.relayCloudOnly(), true);
+    }
+  }
+});
+
+test('current runner stops before launch when cloud login or capability is missing', () => {
+  for (const missing of ['token', 'feature', 'agent']) {
+    const context = { origin: () => 'https://relay.mirasim.ai', auth: { scheme: 'bearer' },
+      config: { enabled: true, relayToken: missing === 'token' ? '' : 'cloud-token' },
+      nativeToken: 'native-token', feature: () => missing !== 'feature',
+      lookup: () => missing === 'agent' ? null : {} };
+    assert.throws(() => vm.runInNewContext(adaptBundle(modernFixture), context), /需要可用的 Mirasim 云端登录/);
+    assert.equal(context.result, undefined);
+  }
+  for (const source of [modernFixture + modernFixture, adaptBundle(modernFixture),
+    modernFixture.replace("'accountToken'", "'newAccountField'"),
+    modernFixture.replace("'carriesOrdinaryTraffic'", "'newPolicyField'")]) {
+    assert.throws(() => adaptBundle(source), /结构已变化|配置已变化/);
+  }
+});
+
 test('adapts Codex to a managed cloud proxy independently of native login state', () => {
   for (const credentialless of [true, false]) {
     const context = { origin: () => 'https://relay.mirasim.ai', auth: { scheme: 'bearer' },
