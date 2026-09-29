@@ -238,7 +238,7 @@ test('passes startup effort while clearing environment overrides in both launch 
 
       assert.equal(captured.command, process.execPath);
       assert.deepEqual(Array.from(captured.args.slice(0, 6)), [
-        entry, 'claude', '--model', catalog.defaultModel,
+        path.join(__dirname, 'mirasim-claude.cjs'), entry, '--model', catalog.defaultModel,
         '--effort', effort || catalog.defaultEffort
       ]);
       assert.equal(captured.args[6], '--settings');

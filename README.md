@@ -6,7 +6,7 @@
 
 | 命令 | 启动的客户端 | 支持的模型 | 请求路由 |
 | --- | --- | --- | --- |
-| `mclaude` | Claude Code | Mirasim 的 Claude 模型目录中的模型，支持 Opus、Sonnet、Haiku、Fable 系列别名 | 跟随 Mirasim 的 Claude 路由设置：本机账号、自动云端回退或云端 |
+| `mclaude` | Claude Code | Mirasim 的 Claude 模型目录中的模型，支持 Opus、Sonnet、Haiku、Fable 系列别名 | 仅使用 Mirasim 云端额度 |
 | `mkimi` | Kimi Code CLI | Kimi K3（目录 ID：`kimi-code/k3`，请求 ID：`kimi-k3`） | 使用 Mirasim 云路由，消耗现有 Mirasim 额度 |
 | `mcodex` | Codex CLI | Mirasim 的 Codex 模型目录中的 GPT 模型 | 使用 Mirasim 云路由，消耗现有 Mirasim 额度 |
 
@@ -84,7 +84,7 @@ mclaude --continue
 - 模型目录、默认模型和推理强度缓存 7 天，保存在 mclaude 项目的 `.cache/catalog.json`，已通过 `.gitignore` 排除，文件权限为 `0600`。无论从哪个工作目录启动，都复用这份缓存。Mirasim 版本、启动入口路径、Mirasim 配置文件内容，或 `CLAUDE_MODEL`、`CLAUDE_REASONING_EFFORT` 变化时缓存立即失效；重写内容相同的配置不会失效。`--model` 和 `--effort` 不进入缓存，每次指定仍独立生效。
 - 缓存未命中时，优先连接运行中的 Desktop（本机端口 `4970`）；读取失败时，由 Mirasim CLI 临时启动一次性后台服务，读取同一份配置后自动关闭。无需手动启动后台服务。
 - 缓存只保存模型信息和校验元数据，不保存登录凭据或后台端口。缓存损坏、时间戳异常或无法写入时仍会正常查询；查询期间配置发生变化时，本次结果不写入缓存。缓存过期后的下一次启动会重新获取目录；远端发布新模型后，可以使用 `--refresh` 提前刷新。刷新失败时本次启动报错，已有缓存文件保留。
-- mclaude 不设置 `ANTHROPIC_BASE_URL` 和 `ANTHROPIC_AUTH_TOKEN`：Base URL 指向 Mirasim 的本机代理，登录与请求路由都由 Mirasim CLI 处理，不依赖 Desktop 的 `4970` 服务。
+- mclaude 通过内存中的启动适配固定使用 Mirasim 云端额度。Mirasim CLI 注入本机代理的 `ANTHROPIC_BASE_URL` 和专用 `ANTHROPIC_AUTH_TOKEN`，不依赖 Desktop 的 `4970` 服务。未登录、额度耗尽或云端不可用时直接报错，不回退到本机账号；Desktop 路由设置变化也不会改变此规则。`--dry-run` 中的 `route` 为 `cloud`。Mirasim 更新后若适配结构不再匹配，启动器会报错停止。
 - 主模型通过 `--model` 指定，模型相关环境变量通过本次启动的 `--settings` 和子进程环境传入。
 - 推理强度的启动值优先采用 `mclaude --effort` 显式指定的值，未指定时采用 Mirasim 模型目录中的默认值，并通过 Claude Code 的 `--effort` 参数传入。需要长期改变默认强度时，在 Mirasim 中修改 Claude 的默认推理强度；配置文件内容变化会使目录缓存失效，下次启动重新读取。
 - 本次启动将 `CLAUDE_CODE_EFFORT_LEVEL` 覆盖为空字符串，因此父进程环境及 Claude Code 用户、项目配置中的同名变量在 mclaude 会话中不再控制 effort，`/effort` 可以调整实际生效值。直接运行 `claude` 时仍使用原有配置。

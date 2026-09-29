@@ -6,6 +6,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { createHash } = require('node:crypto');
 const { execFileSync, spawn } = require('node:child_process');
+const { adaptBundle } = require('./mirasim-claude.cjs');
 
 const families = ['opus', 'sonnet', 'haiku', 'fable'];
 const catalogTtlMs = 7 * 24 * 60 * 60 * 1000;
@@ -188,7 +189,7 @@ function buildSettings(catalog, options) {
 function launch(entry, config, args) {
   // The overlay and process environment must agree: Claude reads both sources.
   const child = spawn(process.execPath, [
-    entry, 'claude', '--model', config.model, '--effort', config.effort,
+    path.join(__dirname, 'mirasim-claude.cjs'), entry, '--model', config.model, '--effort', config.effort,
     '--settings', JSON.stringify(config.settings), ...args
   ], { stdio: 'inherit', env: { ...process.env, ...config.settings.env } });
 
@@ -220,12 +221,13 @@ function main(args) {
   }
   const options = parseArgs(args);
   const mirasim = findMirasim();
+  adaptBundle(fs.readFileSync(mirasim.entry, 'utf8'));
   const config = buildSettings(cachedCatalog(mirasim, { refresh: options.refresh }), options);
   if (options.dryRun) {
     console.log(JSON.stringify({
       ...mirasim, model: config.model, effort: config.effort,
       roles: config.roles, subagentModel: config.settings.env.CLAUDE_CODE_SUBAGENT_MODEL,
-      fallbacks: config.fallbacks
+      fallbacks: config.fallbacks, route: 'cloud'
     }, null, 2));
     return;
   }
