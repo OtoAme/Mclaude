@@ -23,9 +23,22 @@ function adaptBundle(source) {
   source = source.replace(marker, marker + fields);
 
   // Keep the signed cloud route available even when a native Kimi login exists.
-  const relay = /('kimi':\{'agent':'kimi','baseURL':[^,{}]+,'authScheme':[^,{}]+,'quotaFailover':)([^,{}]+)(,'pathPrefix':'\/v1'(?:,'soldWithoutOwnAccount':[^,{}]+)?\})/g;
-  if ([...source.matchAll(relay)].length !== 1) {
+  const relay = /('kimi':\{'agent':'kimi','baseURL':[^,{}]+,'authScheme':[^,{}]+,'(?:quotaFailover|carriesOrdinaryTraffic)':)([^,{}]+)(,'pathPrefix':'\/v1'(?:,'soldWithoutOwnAccount':[^,{}]+)?\})/g;
+  const credentials = /![\w$]+\['accountToken'\]&&!!([\w$]+)\['relayToken'\]&&([\w$]+)\(\)&&!!([\w$]+)\(([\w$]+)\['agent'\]\)&&![\w$]+\([\w$]+\(\),\4\['agent'\]\)/g;
+  const routing = /('failoverAgent':[\w$]+\['agent'\],)('relayCredentialless':\(\)=>[\w$]+,)/g;
+  const relayMatches = [...source.matchAll(relay)];
+  const modern = relayMatches[0]?.[1].includes("'carriesOrdinaryTraffic'");
+  if (relayMatches.length !== 1 || (modern &&
+      ([...source.matchAll(credentials)].length !== 1 || [...source.matchAll(routing)].length !== 1))) {
     throw new Error('Mirasim 的 Kimi 云路由结构已变化，需要更新 mkimi 适配。');
+  }
+  // Current runners use credentialless mode to inject managed proxy auth.
+  if (modern) {
+    source = source.replace(credentials, (_match, config, enabled, agent, options) =>
+      `(()=>{if(!${config}['relayToken']||!${enabled}()||!${agent}(${options}['agent']))` +
+      `{throw new Error('mkimi 需要可用的 Mirasim 云端登录。');}return true;})()`)
+      // Keep cloud routing after credential renewal or Desktop route changes.
+      .replace(routing, "$1'relayCloudOnly':()=>true,$2");
   }
   return source.replace(relay, '$1true$3');
 }

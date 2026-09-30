@@ -79,6 +79,66 @@ const cloud={'kimi':{'agent':'kimi','baseURL':origin(),'authScheme':auth.scheme,
 result={agent:agents.kimi,cloud:cloud.kimi};
 `;
 
+const modernFixture = fixture.replace("'quotaFailover':false",
+  "'carriesOrdinaryTraffic':!(-0x236d+0x1*0x23b3+0x23*-0x2)")
+  .replace('result={agent:agents.kimi,cloud:cloud.kimi};', `
+const credentialless=!options['accountToken']&&!!config['relayToken']&&feature()&&!!lookup(options['agent'])&&!native(settings(),options['agent']);
+const useRelay=feature()&&(cloud.kimi.carriesOrdinaryTraffic||credentialless)&&config.relayToken&&(config.enabled||credentialless);
+const managed=!!agents.kimi.authTokenEnv&&feature()&&!!lookup(options.agent)&&!!config.relayToken&&(credentialless||(cloud.kimi.carriesOrdinaryTraffic&&config.enabled));
+result={agent:agents.kimi,cloud:cloud.kimi,useRelay,managed,
+interceptor:{'failoverAgent':options['agent'],'relayCredentialless':()=>credentialless,'directAuth':()=>options.accountToken}};
+`);
+
+test('supports the current cloud policy and managed auth regardless of native login or Desktop mode', () => {
+  for (const enabled of [false, true]) {
+    for (const accountToken of [null, 'native-token']) {
+      const context = {
+        origin: () => 'https://relay.mirasim.ai', auth: { scheme: 'bearer' },
+        options: { agent: 'kimi', accountToken }, config: { enabled, relayToken: 'cloud-token' },
+        feature: () => true, lookup: () => ({}),
+        native: () => { throw new Error('must not consult native credentials'); }
+      };
+      vm.runInNewContext(adaptBundle(modernFixture), context);
+      const { agent, cloud, interceptor, useRelay, managed } = context.result;
+      assert.equal(agent.baseUrlEnv, 'KIMI_MODEL_BASE_URL');
+      assert.equal(agent.authTokenEnv, 'KIMI_MODEL_API_KEY');
+      assert.equal(cloud.carriesOrdinaryTraffic, true);
+      assert.equal(cloud.pathPrefix, '/v1');
+      assert.equal(useRelay, true);
+      assert.equal(managed, true);
+      assert.equal(interceptor.relayCredentialless(), true);
+      assert.equal(interceptor.relayCloudOnly(), true);
+      context.config.enabled = !enabled;
+      context.config.relayToken = 'renewed-token';
+      assert.equal(interceptor.relayCloudOnly(), true);
+    }
+  }
+});
+
+test('current runner refuses startup without a usable cloud login even with a native account', () => {
+  for (const missing of ['token', 'feature', 'agent']) {
+    const context = {
+      origin: () => 'https://relay.mirasim.ai', auth: { scheme: 'bearer' },
+      options: { agent: 'kimi', accountToken: 'native-token' },
+      config: { enabled: true, relayToken: missing === 'token' ? '' : 'cloud-token' },
+      feature: () => missing !== 'feature', lookup: () => missing === 'agent' ? null : {}
+    };
+    assert.throws(() => vm.runInNewContext(adaptBundle(modernFixture), context), /需要可用的 Mirasim 云端登录/);
+    assert.equal(context.result, undefined);
+  }
+});
+
+test('refuses changed or ambiguous current cloud runner structures', () => {
+  for (const source of [modernFixture + modernFixture, adaptBundle(modernFixture),
+    modernFixture.replace("'accountToken'", "'newAccountField'"),
+    modernFixture.replace("'relayCredentialless'", "'newRoutingField'"),
+    modernFixture.replace("'carriesOrdinaryTraffic'", "'newPolicyField'"),
+    modernFixture.replace('interceptor:{',
+      "duplicate:{'failoverAgent':options['agent'],'relayCredentialless':()=>credentialless,},interceptor:{")]) {
+    assert.throws(() => adaptBundle(source), /结构已变化|配置已变化/);
+  }
+});
+
 test('adapted metadata supplies a gated cloud proxy to the terminal runner', () => {
   const context = { origin: () => 'https://relay.mirasim.ai', auth: { scheme: 'bearer' } };
   vm.runInNewContext(adaptBundle(fixture), context);
