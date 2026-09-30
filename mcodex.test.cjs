@@ -3,10 +3,11 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const vm = require('node:vm');
 const { EventEmitter } = require('node:events');
-const { parseArgs, readCatalog, buildConfig } = require('./mcodex.cjs');
+const { parseArgs, readCatalog, readLauncherConfig, buildConfig, readReviewCatalog } = require('./mcodex.cjs');
 const { adaptBundle, proxyArgs } = require('./mirasim-codex.cjs');
 
 const catalog = {
@@ -16,6 +17,195 @@ const catalog = {
   ], defaultModel: 'gpt-5.6-sol', defaultEffort: 'xhigh',
   effort: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'].map(id => ({ id }))
 };
+
+const reviewModels = ['deepseek-flash', 'kimi-k3', 'glm-5.3-flash'];
+const reviewCatalog = {
+  ...catalog,
+  models: [...catalog.models, ...reviewModels.map(id => ({ id, contextWindow: 1000000 }))],
+  effortByModel: Object.fromEntries(reviewModels.map(id => [id,
+    ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'].map(id => ({
+      id, unavailable: ['medium', 'xhigh', 'ultra'].includes(id)
+    }))
+  ]))
+};
+
+const nativeCatalog = {
+  version: 'test-version',
+  models: [
+    {
+      slug: 'gpt-5.6-sol', display_name: 'GPT 5.6 Sol', context_window: 872000, visibility: 'list',
+      default_reasoning_level: 'medium', use_responses_lite: true,
+      supports_parallel_tool_calls: true, base_instructions: 'Main model instructions',
+      additional_speed_tiers: ['fast'], service_tiers: ['priority'],
+      supported_reasoning_levels: [{ effort: 'ultra', description: 'Ultra reasoning' }]
+    },
+    { slug: 'gpt-6-astra', context_window: 872000, base_instructions: 'Astra instructions' },
+    {
+      slug: 'codex-auto-review', display_name: 'Codex Auto Review', context_window: 128000,
+      max_context_window: 128000, use_responses_lite: true, support_verbosity: true,
+      default_reasoning_level: 'medium', base_instructions: 'Approval review instructions',
+      additional_speed_tiers: ['fast'], service_tiers: ['priority'],
+      supported_reasoning_levels: [{ effort: 'medium', description: 'Medium reasoning' }]
+    }
+  ]
+};
+
+function makeTempDirectory(t) {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'mcodex-test-'));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  return directory;
+}
+
+test('reads the launcher review model and disables it for missing or blank configuration', t => {
+  const file = path.join(makeTempDirectory(t), 'mcodex.config.json');
+  assert.deepEqual(readLauncherConfig(file), {});
+  for (const input of [{}, { autoReviewModel: '' }, { autoReviewModel: ' \n\t ' }]) {
+    fs.writeFileSync(file, JSON.stringify(input));
+    const options = readLauncherConfig(file);
+    assert.equal(options.autoReviewModel, '');
+    assert.equal(buildConfig(reviewCatalog, options, {}).autoReview, undefined);
+  }
+  fs.writeFileSync(file, JSON.stringify({ autoReviewModel: '  deepseek-flash \n' }));
+  assert.deepEqual(readLauncherConfig(file), { autoReviewModel: 'deepseek-flash' });
+});
+
+test('rejects malformed configuration without exposing file contents', t => {
+  const file = path.join(makeTempDirectory(t), 'mcodex.config.json');
+  fs.writeFileSync(file, '{private-configuration');
+  assert.throws(() => readLauncherConfig(file), error =>
+    /JSON 格式/.test(error.message) && !error.message.includes('private-configuration'));
+  for (const input of [null, [], 'deepseek-flash', { autoReviewModel: null },
+    { autoReviewModel: 123 }, { autoReviewModel: true }, { autoReviewModel: [] }]) {
+    fs.writeFileSync(file, JSON.stringify(input));
+    assert.throws(() => readLauncherConfig(file), /必须是模型 ID 字符串/);
+  }
+});
+
+test('resolves launcher configuration from its installation directory independently of cwd', () => {
+  const source = fs.readFileSync(path.join(__dirname, 'mcodex.cjs'), 'utf8');
+  let captured;
+  const context = vm.createContext({
+    module: { exports: {} }, __dirname: '/installed/mclaude',
+    process: { cwd: () => '/different/project' },
+    require: name => name === 'node:fs' ? {
+      readFileSync: file => { captured = file; return '{"autoReviewModel":"deepseek-flash"}'; }
+    } : require(name)
+  });
+  vm.runInContext(source, context);
+  assert.equal(context.readLauncherConfig().autoReviewModel, 'deepseek-flash');
+  assert.equal(captured, '/installed/mclaude/mcodex.config.json');
+});
+
+test('selects supported Mirasim review models with low effort and filters unavailable levels', () => {
+  for (const model of reviewModels) {
+    const config = buildConfig(reviewCatalog, { autoReviewModel: model }, {});
+    assert.equal(config.model, catalog.defaultModel);
+    assert.equal(config.effort, 'xhigh');
+    assert.deepEqual(config.autoReview, {
+      model, effort: 'low', efforts: ['low', 'high', 'max'], contextWindow: 1000000
+    });
+  }
+  const { effortByModel, ...sharedEfforts } = reviewCatalog;
+  assert.deepEqual(buildConfig(sharedEfforts, { autoReviewModel: 'deepseek-flash' }, {}).autoReview.efforts,
+    catalog.effort.map(item => item.id));
+});
+
+test('rejects unknown review models, invalid context lengths and unavailable low effort', () => {
+  for (const model of ['missing', 'v4.1-flash', 'k3', 'codex-auto-review']) {
+    assert.throws(() => buildConfig(reviewCatalog, { autoReviewModel: model }, {}), /审核模型.*不在 Mirasim 可用目录/);
+  }
+  const options = { autoReviewModel: 'deepseek-flash' };
+  for (const levels of [[], [{ id: 'high' }], [{ id: 'low', unavailable: true }], {}]) {
+    assert.throws(() => buildConfig({
+      ...reviewCatalog, effortByModel: { 'deepseek-flash': levels }
+    }, options, {}), /未提供 low/);
+  }
+  for (const contextWindow of [undefined, 0, -1, 1.5, '1000000']) {
+    assert.throws(() => buildConfig({ ...reviewCatalog, models: reviewCatalog.models.map(item =>
+      item.id === options.autoReviewModel ? { ...item, contextWindow } : item)
+    }, options, {}), /审核模型上下文长度无效/);
+  }
+});
+
+test('maps all native review slots while preserving main model metadata and ordinary Responses for domestic models', () => {
+  const before = JSON.stringify(nativeCatalog);
+  for (const model of reviewModels) {
+    const config = buildConfig(reviewCatalog, { autoReviewModel: model }, { MIRASIM_CODEX_BIN: '/custom/codex' });
+    const rewritten = readReviewCatalog(config, (command, args, options) => {
+      assert.equal(command, '/custom/codex');
+      assert.deepEqual(args, ['debug', 'models', '--bundled']);
+      assert.deepEqual(options.env, config.env);
+      assert.deepEqual(options.stdio, ['ignore', 'pipe', 'pipe']);
+      return JSON.stringify(nativeCatalog);
+    });
+    assert.equal(rewritten.version, nativeCatalog.version);
+    assert.equal(rewritten.models.length, nativeCatalog.models.length + 1);
+    for (const original of nativeCatalog.models) {
+      assert.deepEqual(rewritten.models.find(item => item.slug === original.slug), {
+        ...original, auto_review_model_override: model
+      });
+    }
+    const reviewer = rewritten.models.find(item => item.slug === model);
+    assert.equal(reviewer.display_name, model);
+    assert.equal(reviewer.context_window, 1000000);
+    assert.equal(reviewer.max_context_window, 1000000);
+    assert.equal(reviewer.default_reasoning_level, 'low');
+    assert.deepEqual(reviewer.supported_reasoning_levels.map(item => item.effort), ['low', 'high', 'max']);
+    assert.equal(reviewer.base_instructions, 'Approval review instructions');
+    assert.equal(reviewer.use_responses_lite, false);
+    assert.equal(reviewer.support_verbosity, false);
+    assert.deepEqual(reviewer.additional_speed_tiers, []);
+    assert.deepEqual(reviewer.service_tiers, []);
+    assert.ok(rewritten.models.every(item => item.auto_review_model_override === model));
+  }
+  assert.equal(JSON.stringify(nativeCatalog), before);
+});
+
+test('keeps existing native review model capabilities without duplicating its catalog entry', () => {
+  const config = buildConfig(reviewCatalog, { autoReviewModel: 'gpt-5.6-sol' }, {});
+  const rewritten = readReviewCatalog(config, command => {
+    assert.equal(command, 'codex');
+    return JSON.stringify(nativeCatalog);
+  });
+  assert.equal(rewritten.models.length, nativeCatalog.models.length);
+  const reviewer = rewritten.models.find(item => item.slug === config.autoReview.model);
+  assert.equal(reviewer.use_responses_lite, true);
+  assert.equal(reviewer.base_instructions, 'Main model instructions');
+  assert.equal(reviewer.supports_parallel_tool_calls, true);
+  assert.deepEqual(reviewer.service_tiers, ['priority']);
+});
+
+test('retains normal main model instructions for Mirasim models absent from the bundled catalog', () => {
+  for (const model of ['kimi-k3', 'deepseek-flash']) {
+    const config = buildConfig(reviewCatalog, { model, effort: 'high', autoReviewModel: 'deepseek-flash' }, {});
+    const rewritten = readReviewCatalog(config, () => JSON.stringify(nativeCatalog));
+    const main = rewritten.models.find(item => item.slug === model);
+    assert.equal(rewritten.models.filter(item => item.slug === model).length, 1);
+    assert.equal(main.base_instructions, 'Main model instructions');
+    assert.equal(main.supports_parallel_tool_calls, true);
+    assert.equal(main.display_name, model);
+    assert.equal(main.context_window, 1000000);
+    assert.equal(main.max_context_window, 1000000);
+    assert.equal(main.auto_review_model_override, 'deepseek-flash');
+  }
+});
+
+test('reports native catalog failures without exposing subprocess output', () => {
+  const config = buildConfig(reviewCatalog, { autoReviewModel: 'deepseek-flash' }, {});
+  for (const run of [
+    () => { throw Object.assign(new Error('private-token'), { stdout: 'private-output', stderr: 'private-error' }); },
+    () => 'private-output is not JSON'
+  ]) {
+    assert.throws(() => readReviewCatalog(config, run), error =>
+      /无法读取 Codex 内置模型目录/.test(error.message) && !error.message.includes('private-'));
+  }
+  for (const input of [{}, { models: {} }, { models: [null] }, { models: [{ slug: 42 }] }]) {
+    assert.throws(() => readReviewCatalog(config, () => JSON.stringify(input)), /内置模型目录无效/);
+  }
+  assert.throws(() => readReviewCatalog(config, () => JSON.stringify({
+    models: nativeCatalog.models.filter(item => item.slug !== 'codex-auto-review')
+  })), /内置目录缺少/);
+});
 
 test('parses Codex launcher options without consuming native subcommands or prompt text', () => {
   assert.deepEqual(parseArgs(['--dry-run', '--model=gpt-6-astra', '--effort', 'ultra', 'resume', '--last']), {
@@ -225,4 +415,109 @@ test('launches through the GPT adapter with native arguments, config and exit st
   assert.equal(parent.exitCode, 7);
   assert.equal(parent.listenerCount('SIGINT'), 0);
   assert.equal(parent.listenerCount('SIGTERM'), 0);
+});
+
+function createLaunchHarness(t, spawnOverride) {
+  const directory = makeTempDirectory(t);
+  const child = new EventEmitter();
+  const childSignals = [];
+  child.kill = signal => childSignals.push(signal);
+  const parentSignals = [];
+  const parent = Object.assign(new EventEmitter(), {
+    execPath: process.execPath, env: {}, exitCode: 0, pid: 12345,
+    kill: (pid, signal) => parentSignals.push({ pid, signal })
+  });
+  const errors = [];
+  const harness = { directory, child, parent, errors, childSignals, parentSignals };
+  const context = vm.createContext({
+    module: { exports: {} }, __dirname, process: parent,
+    console: { error: message => errors.push(message) },
+    require: name => name === 'node:child_process' ? {
+      spawn: (command, args, options) => {
+        harness.captured = { command, args: Array.from(args), options };
+        return spawnOverride ? spawnOverride() : child;
+      }
+    } : name === 'node:os' ? { ...os, tmpdir: () => directory } : require(name)
+  });
+  vm.runInContext(fs.readFileSync(path.join(__dirname, 'mcodex.cjs'), 'utf8'), context);
+  harness.launch = config => context.launch('/mirasim/server.cjs', config, ['resume', '--last']);
+  return harness;
+}
+
+function reviewLaunchConfig() {
+  const config = buildConfig(reviewCatalog, { autoReviewModel: 'deepseek-flash' }, { CODEX_HOME: '/my-codex' });
+  config.reviewCatalog = readReviewCatalog(config, () => JSON.stringify(nativeCatalog));
+  return config;
+}
+
+test('launches with a temporary review catalog and removes it after a normal exit', t => {
+  const harness = createLaunchHarness(t);
+  const config = reviewLaunchConfig();
+  harness.launch(config);
+  const { captured, parent, child } = harness;
+  const catalogOption = captured.args.find(arg => arg.startsWith('model_catalog_json='));
+  const file = JSON.parse(catalogOption.slice('model_catalog_json='.length));
+  assert.equal(path.dirname(path.dirname(file)), harness.directory);
+  assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), config.reviewCatalog);
+  assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+  assert.deepEqual(captured.args, [
+    path.join(__dirname, 'mirasim-codex.cjs'), '/mirasim/server.cjs',
+    '-c', 'model="gpt-5.6-sol"', '-c', 'model_reasoning_effort="xhigh"',
+    '-c', 'model_context_window=872000', '-c', catalogOption,
+    '-c', 'approvals_reviewer="auto_review"', 'resume', '--last'
+  ]);
+  assert.equal(captured.options.env, config.env);
+  assert.equal(parent.listenerCount('SIGINT'), 1);
+  assert.equal(parent.listenerCount('SIGTERM'), 1);
+  child.emit('exit', 7, null);
+  assert.equal(parent.exitCode, 7);
+  assert.equal(parent.listenerCount('SIGINT'), 0);
+  assert.equal(parent.listenerCount('SIGTERM'), 0);
+  assert.equal(fs.existsSync(path.dirname(file)), false);
+  assert.deepEqual(fs.readdirSync(harness.directory), []);
+});
+
+test('cleans temporary review files when spawn throws or the child emits an error', t => {
+  const spawnError = new Error('spawn failed');
+  const failedSpawn = createLaunchHarness(t, () => { throw spawnError; });
+  assert.throws(() => failedSpawn.launch(reviewLaunchConfig()), error => error === spawnError);
+  assert.deepEqual(fs.readdirSync(failedSpawn.directory), []);
+  assert.equal(failedSpawn.parent.listenerCount('SIGINT'), 0);
+  assert.equal(failedSpawn.parent.listenerCount('SIGTERM'), 0);
+
+  const failedChild = createLaunchHarness(t);
+  failedChild.launch(reviewLaunchConfig());
+  assert.equal(fs.readdirSync(failedChild.directory).length, 1);
+  failedChild.child.emit('error', new Error('child failed'));
+  assert.equal(failedChild.parent.exitCode, 1);
+  assert.deepEqual(failedChild.errors, ['mcodex: child failed']);
+  assert.deepEqual(fs.readdirSync(failedChild.directory), []);
+  assert.equal(failedChild.parent.listenerCount('SIGINT'), 0);
+  assert.equal(failedChild.parent.listenerCount('SIGTERM'), 0);
+});
+
+test('cleans temporary review files before propagating a child termination signal', t => {
+  const harness = createLaunchHarness(t);
+  harness.launch(reviewLaunchConfig());
+  harness.parent.emit('SIGTERM');
+  assert.deepEqual(harness.childSignals, ['SIGTERM']);
+  harness.child.emit('exit', null, 'SIGTERM');
+  assert.deepEqual(fs.readdirSync(harness.directory), []);
+  assert.deepEqual(harness.parentSignals, [{ pid: 12345, signal: 'SIGTERM' }]);
+  assert.equal(harness.parent.listenerCount('SIGTERM'), 0);
+});
+
+test('keeps inherited approval configuration and creates no review files when the slot is empty', t => {
+  const harness = createLaunchHarness(t);
+  const config = buildConfig(reviewCatalog, { autoReviewModel: '' }, { CODEX_HOME: '/my-codex' });
+  harness.launch(config);
+  assert.deepEqual(harness.captured.args, [
+    path.join(__dirname, 'mirasim-codex.cjs'), '/mirasim/server.cjs',
+    '-c', 'model="gpt-5.6-sol"', '-c', 'model_reasoning_effort="xhigh"',
+    '-c', 'model_context_window=872000', 'resume', '--last'
+  ]);
+  assert.equal(harness.captured.options.env.CODEX_HOME, '/my-codex');
+  assert.deepEqual(fs.readdirSync(harness.directory), []);
+  harness.child.emit('exit', 0, null);
+  assert.equal(harness.parent.exitCode, 0);
 });

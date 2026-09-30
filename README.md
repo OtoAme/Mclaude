@@ -138,7 +138,7 @@ args = ["mkimi", "--output-format", "stream-json", "-p", prompt]
 
 ```bash
 mcodex                              # 交互终端
-mcodex --dry-run                    # 查看模型、上下文长度、推理强度和路由
+mcodex --dry-run                    # 查看主模型、审核模型、推理强度和路由
 mcodex --model gpt-6-astra           # 本次指定目录中的模型
 mcodex --effort high                # 本次指定推理强度
 mcodex resume --last                # 继续最近的 Codex 会话
@@ -147,6 +147,20 @@ mcodex -- --help                    # 查看官方 Codex CLI 参数
 ```
 
 启动器选项须放在 Codex 参数之前。`--model` 接受目录中的完整模型 ID，`default` 表示采用 Mirasim 的默认模型；`--effort` 接受当前目录提供的推理强度，目前包括 `low`、`medium`、`high`、`xhigh`、`max`、`ultra`。每次启动重新读取目录，优先连接 Desktop，未运行时通过临时后台查询。上下文长度也采用目录中的值。
+
+项目根目录的 `mcodex.config.json` 控制自动审批模型，默认内容为：
+
+```json
+{
+  "autoReviewModel": "deepseek-flash"
+}
+```
+
+直接运行 `mcodex` 即使用 DeepSeek Flash 替代 `codex-auto-review`，默认以 `low` 强度审核需要审批的操作。也可填 `kimi-k3` 或 `glm-5.3-flash`；填写 Mirasim Codex 目录中的完整 ID。配置文件始终从启动器安装目录读取，不受当前工作目录影响。将值改为 `""`（或移除该字段/文件）则不配置审核模型，也不改变原有审批模式。
+
+配置非空时，仅本次启动设置 `approvals_reviewer="auto_review"`，保留现有沙箱、审批策略和规则。启动器从本机 Codex 的完整内置目录生成临时 `model_catalog_json`，通过 `auto_review_model_override` 指定审核模型，退出时清理临时文件。这会替代本次会话原先配置的自定义模型目录；主模型的内置提示词和能力信息仍保留。`review_model` 对应 `/review` 代码审阅，与这里的操作审批不同。参见 [OpenAI 配置文档](https://developers.openai.com/codex/config-reference)。
+
+启动器不自动切换备用审核模型。模型不可用或请求失败时由 Codex 报错；审核拒绝也不会触发换模型重试。已在 Codex CLI 0.159.2 验证目录接入及 DeepSeek Flash 的普通输出、结构化输出；真实审核仍可能因慢响应或额外工具调用超过约 90 秒的审核时限，`low` 也不能保证按时完成。
 
 `mcodex` 在本次进程中启用 Mirasim 的云代理、设备签名和令牌续期，云路由不可用时停止请求。模型、推理强度和代理连接通过 Codex 启动参数及临时环境变量传入；继续使用现有 `CODEX_HOME`、会话、技能、MCP 和权限配置。启动器不修改 Codex 或 Mirasim 的用户配置，Codex 自身的交互命令仍可能保存用户设置。
 
